@@ -553,10 +553,18 @@ void csync_daemon_session()
 				struct stat st;
 
 				if ( lstat_strict(prefixsubst(tag[2]), &st) != 0 ) {
-					if ( errno == ENOENT )
-						conn_printf("OK (not_found).\n---\noctet-stream 0\n");
-					else
+					if ( errno == ENOENT ) {
+						struct stat sb;
+						char parent_dirname[strlen(tag[2])];
+						get_parent_child_from_path(parent_dirname,NULL,tag[2]);
+						if ( lstat_strict(prefixsubst(parent_dirname), &sb) != 0 ) {
+							conn_printf("OK (parent_dir_missing).\n---\noctet-stream 0\n");
+						} else {
+							conn_printf("OK (path_not_found).\n---\noctet-stream 0\n");
+						}
+					} else {
 						cmd_error = strerror(errno);
+					}
 					break;
 				} else
 					if ( csync_check_pure(tag[2]) ) {

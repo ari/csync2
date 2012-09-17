@@ -102,6 +102,34 @@ extern void conn_printf(const char *fmt, ...);
 extern int conn_fgets(char *s, int size);
 extern size_t conn_gets(char *s, size_t size);
 
+enum connection_response {
+	CR_OK = 0,
+	/* OK response codes. They need all to start with "OK (" */
+	CR_OK_CMD_FINISHED,		/* "OK (cmd_finished).", */
+	CR_OK_DATA_FOLLOWS,		/* "OK (data_follows).", */
+	CR_OK_SEND_DATA,		/* "OK (send_data).", */
+	CR_OK_PATH_NOT_FOUND,		/* "OK (path_not_found).", */
+	CR_OK_PARENT_DIR_MISSING,	/* "OK (parent_dir_missing).", */
+	CR_OK_CU_LATER,			/* "OK (cu_later).", */
+	CR_OK_ACTIVATING_SSL,		/* "OK (activating_ssl).", */
+
+	CR_ERROR,
+	/* special error codes, MUST NOT start with "OK (" */
+	CR_ERR_CONN_CLOSED,
+	CR_ERR_ALSO_DIRTY_HERE,	/* "File is also marked dirty here!", */
+};
+
+static inline int is_ok_response(enum connection_response r)
+{
+	return r >= CR_OK && r < CR_ERROR;
+}
+
+/* converts to on-the-wire textual representation */
+extern const char *conn_response(enum connection_response);
+
+/* converts from on-the-wire textual representation */
+extern enum connection_response conn_response_to_enum(const char *);
+
 
 /* db.c */
 
@@ -176,6 +204,7 @@ extern void csync_rs_sig(const char *filename);
 extern int csync_rs_delta(const char *filename);
 extern int csync_rs_patch(const char *filename);
 extern int mkpath(const char *path, mode_t mode);
+extern void get_parent_child_from_path(char *dirname, char* filename,const char *filepath);
 
 
 /* checktxt.c */

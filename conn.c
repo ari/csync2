@@ -46,6 +46,46 @@ static gnutls_session_t conn_tls_session;
 static gnutls_certificate_credentials_t conn_x509_cred;
 #endif
 
+static const char *__response[] = {
+	[CR_OK_CMD_FINISHED] = "OK (cmd_finished).",
+	[CR_OK_DATA_FOLLOWS] = "OK (data_follows).",
+	[CR_OK_SEND_DATA] = "OK (send_data).",
+	[CR_OK_PATH_NOT_FOUND] = "OK (path_not_found).",
+	[CR_OK_PARENT_DIR_MISSING] = "OK (parent_dir_missing).",
+	[CR_OK_CU_LATER] = "OK (cu_later).",
+	[CR_OK_ACTIVATING_SSL] = "OK (activating_ssl).",
+	[CR_ERR_CONN_CLOSED] = "Connection closed.",
+	[CR_ERR_ALSO_DIRTY_HERE] = "File is also marked dirty here!",
+};
+
+const char *conn_response(unsigned i)
+{
+	if (i < sizeof(__response)/sizeof(__response[0])
+	&& __response[i]
+	&& __response[i][0])
+		return __response[i];
+
+	csync_fatal("BUG! No such response: %u\n", i);
+	return NULL;
+}
+
+enum connection_response conn_response_to_enum(const char *response)
+{
+	const unsigned int len = strlen(response);
+	int i;
+	for (i = 0; i < sizeof(__response)/sizeof(__response[0]); i++) {
+		if (!__response[i][0])
+			continue;
+		if (!strncmp(__response[i], response, len))
+			return i;
+	}
+	/* may be a new OK code? */
+	if (!strncmp(response, "OK (", 4))
+		return CR_OK;
+	else
+		return CR_ERROR;
+}
+
 
 /* getaddrinfo stuff mostly copied from its manpage */
 int conn_connect(const char *peername)

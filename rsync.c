@@ -210,7 +210,6 @@ static int get_tempfile_name(char *tempfile_name, const char *filepath)
  * Stackoverlow.com#http://stackoverflow.com/questions/2336242/recursive-mkdir-system-call-on-unix
  * Returns: 0 on success and -1 on error
  */
-
 int mkpath(const char *path, mode_t mode) {
 	char temp[MAXPATHLEN];
 	char *remaining;
