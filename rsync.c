@@ -62,6 +62,60 @@ static size_t strlcpy(char *d, const char *s, size_t bufsize)
         return ret;
 }
 
+void get_parent_child_from_path(char *dirname, char* filename,const char *filepath) {
+	char *temp;
+	if ((temp = strrchr(filepath, '/')) != NULL) {
+		/* copy up to and excluding the slash */
+		if(dirname!=NULL) {
+			strlcpy( dirname, filepath, ( (strlen(filepath)-strlen(temp)) + 1) );
+		}
+		++temp;//forward one character to skip '/' in the filename
+		if(filename!=NULL) {
+			strlcpy( filename, temp, (strlen(temp) + 1) );
+		}
+	} else {
+		if(filename!=NULL) {
+			strlcpy( filename, filepath, (strlen(filepath) + 1) );
+		}
+	}
+}
+
+static int get_tempdir_name(char * tempdir_name, const char* currentdir_name)
+{
+	int found=0; int length;
+	if ( access(currentdir_name, R_OK|W_OK|X_OK) >= 0 ) {
+		strlcpy(tempdir_name, currentdir_name, strlen(currentdir_name)+ 1);
+		found=1;
+    } else {
+		csync_debug(2,"the directory '%s' seems to have been deleted, hence creating the temp file under 'tempdir'!\n", currentdir_name);
+		if(csync_tempdir!=NULL) {
+			if ( access(csync_tempdir, R_OK|W_OK|X_OK) >= 0 ) {
+				strlcpy(tempdir_name, csync_tempdir, strlen(csync_tempdir)+1);
+				found=1;
+			} else {
+				csync_debug(1,"csync configuration option 'tempdir' is set to %s but that directory does not exit; ensure that it exists and is accessible to the user running 'csync2' process",csync_tempdir);
+			}
+		}
+		if( !found ) {
+			csync_debug(2,"falling back to system temp dir : %s",P_tmpdir);
+			if ( access(P_tmpdir, R_OK|W_OK|X_OK) >= 0 ) {
+				strlcpy(tempdir_name, P_tmpdir, strlen(P_tmpdir)+1);
+				found=1;
+			} else {
+				csync_debug(0,"could not find a usable temporary directory");
+			}
+		}
+	}
+	if(found) {
+		length=strlen(tempdir_name);
+		if(length<MAXPATHLEN && tempdir_name[length-1]!='/') {
+			tempdir_name[length]='/';
+			tempdir_name[length+1]='\0';
+		}
+	}
+	csync_debug(3,"tempdir is found to be : %s",tempdir_name);
+	return found;
+}
 
 /* This has been taken from rsync sources: receiver.c */
 
@@ -70,7 +124,7 @@ static size_t strlcpy(char *d, const char *s, size_t bufsize)
 #define MAX_UNIQUE_NUMBER 999999
 #define MAX_UNIQUE_LOOP 100
 
-/* get_tmpname() - create a tmp filename for a given filename
+/* get_tempfile_name() - create a tmp filename for a given filename
  *
  * If a tmpdir is defined, use that as the directory to put it in.  Otherwise,
  * the tmp filename is in the same directory as the given name.  Note that
@@ -91,62 +145,59 @@ static size_t strlcpy(char *d, const char *s, size_t bufsize)
  * make it easier to figure out what purpose a temp file is serving when a
  * transfer is in progress. */
 
-static int get_tmpname(char *fnametmp, const char *fname)
+static int get_tempfile_name(char *tempfile_name, const char *filepath)
 {
 	int maxname, added, length = 0;
-	const char *f;
-	char *suf;
-
+	char filename[MAXPATHLEN];
+	char currentdir_name[MAXPATHLEN];
+	char *suffix;
 	static unsigned counter_limit;
 	unsigned counter;
 
-	if ((f = strrchr(fname, '/')) != NULL) {
-		++f;
-		length = f - fname;
-		/* copy up to and including the slash */
-		strlcpy(fnametmp, fname, length + 1);
-	} else
-		f = fname;
-	fnametmp[length++] = '.';
+	get_parent_child_from_path(currentdir_name,filename,filepath);
+	if(get_tempdir_name(tempfile_name,currentdir_name)==0) {
+		return 0;
+	}
+	length=strlen(tempfile_name);
+
+	tempfile_name[length++] = '.';
 
 	/* The maxname value is bufsize, and includes space for the '\0'.
-	 * NAME_MAX needs an extra -1 for the name's leading dot. */
+	* NAME_MAX needs an extra -1 for the name's leading dot. */
 	maxname = MIN(MAXPATHLEN - length - TMPNAME_SUFFIX_LEN,
-		      NAME_MAX - 1 - TMPNAME_SUFFIX_LEN);
-
+		  NAME_MAX - 1 - TMPNAME_SUFFIX_LEN);
 	if (maxname < 1) {
-		csync_debug(1, "temporary filename too long: %s\n", fname);
-		fnametmp[0] = '\0';
+		csync_debug(1, "temporary filename too long: %s\n", filepath);
+		tempfile_name[0] = '\0';
 		return 0;
 	}
 
-	added = strlcpy(fnametmp + length, f, maxname);
+	added = strlcpy(tempfile_name + length, filename, maxname);
 	if (added >= maxname)
-		added = maxname - 1;
-	suf = fnametmp + length + added;
-
+	added = maxname - 1;
+	suffix = tempfile_name + length + added;
 	if (!counter_limit) {
 		counter_limit = (unsigned)getpid() + MAX_UNIQUE_LOOP;
 		if (counter_limit > MAX_UNIQUE_NUMBER || counter_limit < MAX_UNIQUE_LOOP)
 			counter_limit = MAX_UNIQUE_LOOP;
 
 		counter = counter_limit - MAX_UNIQUE_LOOP;
-
 		/* This doesn't have to be very good because we don't need
-		 * to worry about someone trying to guess the values:  all
-		 * a conflict will do is cause a device, special file, hard
-		 * link, or symlink to fail to be created.  Also: avoid
-		 * using mktemp() due to gcc's annoying warning. */
+		* to worry about someone trying to guess the values:  all
+		* a conflict will do is cause a device, special file, hard
+		* link, or symlink to fail to be created.  Also: avoid
+		* using mktemp() due to gcc's annoying warning. */
 		while (1) {
-			snprintf(suf, TMPNAME_SUFFIX_LEN+1, ".%d", counter);
-			if (access(fnametmp, 0) < 0)
+			snprintf(suffix, TMPNAME_SUFFIX_LEN+1, ".%d", counter);
+			if (access(tempfile_name, 0) < 0)
 				break;
 			if (++counter >= counter_limit)
 				return 0;
 		}
-	} else
-		memcpy(suf, TMPNAME_SUFFIX, TMPNAME_SUFFIX_LEN+1);
-
+	} else {
+		//memcpy(suffix, TMPNAME_SUFFIX, TMPNAME_SUFFIX_LEN+1);
+		snprintf(suffix, TMPNAME_SUFFIX_LEN+1, ".%d", counter_limit);
+	}
 	return 1;
 }
 
@@ -191,74 +242,88 @@ int mkpath(const char *path, mode_t mode) {
 
 
 /* Returns open file handle for a temp file that resides in the
-   same directory as file fname. The file must be removed after
+   same directory as file filepath. The file must be removed after
    usage.
 */
 
-static FILE *open_temp_file(char *fnametmp, const char *fname)
-{
-	FILE *f;
-	int fd;
-
-	if (get_tmpname(fnametmp, fname) == 0) {
-		csync_debug(1, "ERROR: Couldn't find tempname for file %s\n", fname);
-		return NULL;
-	}
-
-	f = NULL;
-	fd = open(fnametmp, O_CREAT | O_EXCL | O_RDWR, S_IWUSR | S_IRUSR);
-	if (fd >= 0) {
-		f = fdopen(fd, "wb+");
-			/* not unlinking since rename wouldn't work then */
-	}
-	if (fd < 0 || !f) {
-		csync_debug(1, "ERROR: Could not open result from tempnam(%s)!\n", fnametmp);
-		return NULL;
-	}
-
-	return f;
-}
-
-
-
 #ifdef _SVID_SOURCE
-static FILE *paranoid_tmpfile()
+static FILE *paranoid_tempfile(const char *filepath)
 {
-	char *name;
-	FILE *f;
-	int fd;
+	FILE *f = NULL;
+	int fd; int tempdir_length; int filename_length;
+	char template[MAXPATHLEN];
+	char filename[MAXPATHLEN];
+	char currentdir_name[MAXPATHLEN];
+	char tempdir_name[MAXPATHLEN];
 
-	name = tempnam(csync_tempdir, "csync2");
-	if (!name)
-		csync_fatal("ERROR: tempnam() didn't return a valid filename!\n");
+	get_parent_child_from_path(currentdir_name,filename,filepath);
 
-	f = NULL;
-	fd = open(name, O_CREAT | O_EXCL | O_RDWR, S_IWUSR | S_IRUSR);
-	if (fd >= 0) {
-		f = fdopen(fd, "wb+");
-		unlink(name);
+	if(get_tempdir_name(tempdir_name,currentdir_name)>0){
+		tempdir_length=strlen(tempdir_name);
+		filename_length=strlen(filename);
+		csync_debug(3,"creating paranoid tempfile (SYSV) ==> tempdir_name : %s ; filename :  %s",tempdir_name,filename);
+
+		if( tempdir_length!=0 && filename_length!=0 && (tempdir_length < ( MAXPATHLEN-filename_length+20) ) ) {
+			snprintf(template,MAXPATHLEN,"%s.csync2_%s_XXXXXX",tempdir_name,filename);
+		} else {
+			csync_debug(2,"could not create tempfile for %s under the tempdir %s because of MAXPATHLEN restiction; leaving upto the system for deciding where to create the tempfile",filepath,tempdir_name);
+			strcpy(template,".csync2_XXXXXX");
+		}
+	} else {
+		csync_debug(2,"could not find a usable tempdir to create tempfile for file %s; leaving upto the system for deciding where to create the tempfile",filepath);
+		strcpy(template,".csync2_XXXXXX");
 	}
-	if (fd < 0 || !f)
-		csync_fatal("ERROR: Could not open result from tempnam(%s)!\n", name);
 
-	csync_debug(3, "Tempfilename is %s\n", name);
-	free(name);
+	fd = mkstemp(template);
+	if (fd >= 0) {
+		unlink(template);
+		f = fdopen(fd, "wb+");
+	}
+	if (fd < 0 || f==NULL) {
+		csync_fatal("ERROR: Could not create temporary file using mkstemp(%s)!\n", template);
+	}
+	csync_debug(3, "Tempfilename is %s\n", template);
 	return f;
 }
 #else
-static FILE *paranoid_tmpfile()
+static FILE *paranoid_tempfile(const char *filepath)
 {
 	FILE *f;
-
-	if ( access(P_tmpdir, R_OK|W_OK|X_OK) < 0 )
-		csync_fatal("Temp directory '%s' does not exist!\n", P_tmpdir);
-
-	if ( !(f = tmpfile()) )
-		csync_fatal("ERROR: tmpfile() didn't return a valid file handle!\n");
-
+	char filename[MAXPATHLEN];
+	char tempdir_name[MAXPATHLEN]:
+	get_parent_child_from_path(tempdir_name,filename,filepath);
+	csync_debug(3,"creating paranoid tempfile ==> tempdir_name : %s ; filename :  %s",tempdir_name,filename);
+	if ( !(f = tempnam(tempdir_name,filename)) ) {
+		csync_fatal("ERROR: tempnam(%s,%s) didn't return a valid file handle!\n",tempdir_name,filename);
+	}
 	return f;
 }
 #endif
+
+static FILE *open_temp_file(char *tempfile_name, const char *filepath, int paranoid)
+{
+	FILE *f = NULL;
+	int fd = -1;
+
+	if(paranoid) {
+		f=paranoid_tempfile(filepath);
+	} else {
+		if (get_tempfile_name(tempfile_name, filepath) == 0) {
+			csync_debug(1, "ERROR: Couldn't find tempname for file %s\n", filepath);
+			return NULL;
+		}
+		fd = open(tempfile_name, O_CREAT | O_EXCL | O_RDWR, S_IWUSR | S_IRUSR);
+		if (fd >= 0) {
+			f = fdopen(fd, "wb+");
+				/* not unlinking since rename wouldn't work then */
+		}
+	}
+	if (fd < 0 || !f) {
+		csync_debug(1, "ERROR: Could not open result from tempnam(%s)!\n", tempfile_name);
+		return NULL;
+	}
+	return f;
+}
 
 void csync_send_file(FILE *in)
 {
@@ -344,31 +409,30 @@ int csync_rs_check(const char *filename, int isreg)
 
 	csync_debug(3, "Opening basis_file and sig_file..\n");
 
-	sig_file = open_temp_file(tmpfname, prefixsubst(filename));
+	sig_file = open_temp_file(tmpfname, prefixsubst(filename), 1);
 	if (!sig_file)
 		goto io_error;
-	if (unlink(tmpfname) < 0)
-		goto io_error;
-
-	basis_file = fopen(prefixsubst(filename), "rb");
-	if (!basis_file) {	/* ?? why a tmp file? */
-		basis_file = open_temp_file(tmpfname, prefixsubst(filename));
-		if (!basis_file)
-			goto io_error;
-		if (unlink(tmpfname) < 0)
-			goto io_error;
-	}
+	unlink(tmpfname);
 
 	if (isreg) {
+		basis_file = fopen(prefixsubst(filename), "rb");
+		if (!basis_file) {
+			/* REALLY? What if it was a permission problem? */
+			basis_file = fopen("/dev/null", "rb");
+		}
 		csync_debug(3, "Running rs_sig_file() from librsync....\n");
-		result = rs_sig_file(basis_file, sig_file, RS_DEFAULT_BLOCK_LEN, RS_DEFAULT_STRONG_LEN, &stats);
-		if (result != RS_DONE) {
-			csync_debug(0, "Internal error from rsync library!\n");
+		if (basis_file) {
+			result = rs_sig_file(basis_file, sig_file, RS_DEFAULT_BLOCK_LEN, RS_DEFAULT_STRONG_LEN, &stats);
+			if (result != RS_DONE) {
+				csync_debug(0, "Internal error from rsync library!\n");
+				goto error;
+			}
+			fclose(basis_file);
+		} else {
+			csync_debug(0, "Failed to open basis file for %s\n", filename);
 			goto error;
 		}
 	}
-
-	fclose(basis_file);
 	basis_file = 0;
 
 	{
@@ -378,13 +442,17 @@ int csync_rs_check(const char *filename, int isreg)
 			csync_fatal("Format-error while receiving data.\n");
 	}
 
-	fflush(sig_file);
-	if (size != ftell(sig_file)) {
-		csync_debug(2, "Signature size differs: local=%d, peer=%d\n", ftell(sig_file), size);
+	if (sig_file) {
+		fflush(sig_file);
+		if (size != ftell(sig_file)) {
+			csync_debug(2, "Signature size differs: local=%d, peer=%d\n", ftell(sig_file), size);
+			found_diff = 1;
+		}
+		rewind(sig_file);
+	} else {
+		csync_debug(2, "Signature size differs: local don't exist, peer=%d\n", size);
 		found_diff = 1;
 	}
-	rewind(sig_file);
-
 	csync_debug(3, "Receiving %ld bytes ..\n", size);
 
 	while (size > 0) {
@@ -395,21 +463,23 @@ int csync_rs_check(const char *filename, int isreg)
 			csync_fatal("Read-error while receiving data.\n");
 		chunk = rc;
 
-		if (fread(buffer2, chunk, 1, sig_file) != 1) {
-			csync_debug(2, "Found EOF in local sig file.\n");
-			found_diff = 1;
+		if (sig_file) {
+			if (fread(buffer2, chunk, 1, sig_file) != 1) {
+				csync_debug(2, "Found EOF in local sig file.\n");
+				found_diff = 1;
+			}
+			if (memcmp(buffer1, buffer2, chunk)) {
+				csync_debug(2, "Found diff in sig at -%d:-%d\n", size, size - chunk);
+				found_diff = 1;
+			}
 		}
-		if (memcmp(buffer1, buffer2, chunk)) {
-			csync_debug(2, "Found diff in sig at -%d:-%d\n", size, size - chunk);
-			found_diff = 1;
-		}
-
 		size -= chunk;
 		csync_debug(3, "Got %d bytes, %ld bytes left ..\n", chunk, size);
 	}
 
 	csync_debug(3, "File has been checked successfully (%s).\n", found_diff ? "difference found" : "files are equal");
-	fclose(sig_file);
+	if (sig_file)
+		fclose(sig_file);
 	return found_diff;
 
 io_error:
@@ -436,9 +506,11 @@ void csync_rs_sig(const char *filename)
 
 	csync_debug(3, "Opening basis_file and sig_file..\n");
 
-	sig_file = open_temp_file(tmpfname, prefixsubst(filename));
-	if ( !sig_file ) goto io_error;
-	if (unlink(tmpfname) < 0) goto io_error;
+	sig_file = open_temp_file(tmpfname, prefixsubst(filename),0);
+	if ( !sig_file )
+	  goto io_error;
+	if (unlink(tmpfname) < 0)
+	  goto io_error;
 
 	basis_file = fopen(prefixsubst(filename), "rb");
 	if ( !basis_file ) basis_file = fopen("/dev/null", "rb");
@@ -479,7 +551,7 @@ int csync_rs_delta(const char *filename)
 	csync_debug(3, "Csync2 / Librsync: csync_rs_delta('%s')\n", filename);
 
 	csync_debug(3, "Receiving sig_file from peer..\n");
-	sig_file = open_temp_file(tmpfname, prefixsubst(filename));
+	sig_file = open_temp_file(tmpfname, prefixsubst(filename),0);
 	if ( !sig_file ) goto io_error;
 	if (unlink(tmpfname) < 0) goto io_error;
 
@@ -504,7 +576,7 @@ int csync_rs_delta(const char *filename)
 		return -1;
 	}
 
-	delta_file = open_temp_file(tmpfname, prefixsubst(filename));
+	delta_file = open_temp_file(tmpfname, prefixsubst(filename),0);
 	if ( !delta_file ) goto io_error;
 	if (unlink(tmpfname) < 0) goto io_error;
 
@@ -539,33 +611,46 @@ io_error:
 	return -1;
 }
 
-int csync_rs_patch(const char *filename)
+int csync_rs_patch(const char *filepath)
 {
 	FILE *basis_file = 0, *delta_file = 0, *new_file = 0;
 	int backup_errno;
 	rs_stats_t stats;
 	rs_result result;
 	char *errstr = "?";
+	struct stat sb;
+	char dirname[MAXPATHLEN];
 	char tmpfname[MAXPATHLEN], newfname[MAXPATHLEN];
 
-	csync_debug(3, "Csync2 / Librsync: csync_rs_patch('%s')\n", filename);
+	csync_debug(3, "Csync2 / Librsync: csync_rs_patch('%s')\n", filepath);
 
 	csync_debug(3, "Receiving delta_file from peer..\n");
-	delta_file = open_temp_file(tmpfname, prefixsubst(filename));
+
+	get_parent_child_from_path(dirname,NULL,filepath);
+
+	if (stat (dirname, &sb) != 0) {
+		csync_debug(2,"one or more subdirectories in path %s seems to have deleted",filepath);
+		if(mkpath(filepath,0755)!=0) {
+			csync_debug(1,"failed to create path %s",dirname);
+			goto io_error;
+		}
+	}
+
+	delta_file = open_temp_file(tmpfname, prefixsubst(filepath),0);
 	if ( !delta_file ) { errstr="creating delta temp file"; goto io_error; }
 	if (unlink(tmpfname) < 0) { errstr="removing delta temp file"; goto io_error; }
 	if ( csync_recv_file(delta_file) ) goto error;
 
 	csync_debug(3, "Opening to be patched file on local host..\n");
-	basis_file = fopen(prefixsubst(filename), "rb");
+	basis_file = fopen(prefixsubst(filepath), "rb");
 	if ( !basis_file ) {
-		basis_file = open_temp_file(tmpfname, prefixsubst(filename));
+		basis_file = open_temp_file(tmpfname, prefixsubst(filepath),0);
 		if ( !basis_file ) { errstr="opening data file for reading"; goto io_error; }
 		if (unlink(tmpfname) < 0) { errstr="removing data temp file"; goto io_error; }
 	}
 
 	csync_debug(3, "Opening temp file for new data on local host..\n");
-	new_file = open_temp_file(newfname, prefixsubst(filename));
+	new_file = open_temp_file(newfname, prefixsubst(filepath),0);
 	if ( !new_file ) { errstr="creating new data temp file"; goto io_error; }
 
 	csync_debug(3, "Running rs_patch_file() from librsync..\n");
@@ -588,7 +673,7 @@ int csync_rs_patch(const char *filename)
 		char winfilename[MAX_PATH];
 		HANDLE winfh;
 
-		cygwin_conv_to_win32_path(prefixsubst(filename), winfilename);
+		cygwin_conv_to_win32_path(prefixsubst(filepath), winfilename);
 
 		winfh = CreateFile(TEXT(winfilename),
 				GENERIC_WRITE,          // open for writing
@@ -609,7 +694,7 @@ int csync_rs_patch(const char *filename)
 	}
 #endif
 
-	if (rename(newfname, prefixsubst(filename)) < 0) { errstr="renaming tmp file to to be patched file"; goto io_error; }
+	if (rename(newfname, prefixsubst(filepath)) < 0) { errstr="renaming tmp file to to be patched file"; goto io_error; }
 
 	csync_debug(3, "File has been patched successfully.\n");
 	fclose(delta_file);
@@ -619,7 +704,7 @@ int csync_rs_patch(const char *filename)
 
 io_error:
 	csync_debug(0, "I/O Error '%s' while %s in rsync-patch: %s\n",
-			strerror(errno), errstr, prefixsubst(filename));
+			strerror(errno), errstr, prefixsubst(filepath));
 
 error:;
 	backup_errno = errno;
